@@ -9,19 +9,19 @@
   :root {
     color-scheme: dark;
     --page: #0d0d0d;
-    --surface-1: #1a1a19;
-    --surface-2: #232321;
-    --text-primary: #f0efec;
-    --text-secondary: #c3c2b7;
-    --text-muted: #898781;
-    --grid: #2c2c2a;
-    --axis: #383835;
+    --surface-1: #1a1a1a;
+    --surface-2: #232323;
+    --text-primary: #f0f0f0;
+    --text-secondary: #c2c2c2;
+    --text-muted: #888888;
+    --grid: #2c2c2c;
+    --axis: #383838;
     --border: rgba(255,255,255,0.10);
-    --cpu: #3987e5;      /* categorical slot 1 */
-    --gpu: #d95926;      /* categorical slot 2 */
-    --mem: #199e70;      /* categorical slot 3 */
-    --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
-    --accent: #9085e9;
+    --cpu: #ffcd00;      /* categorical slot 1 */
+    --gpu: #d0d0d0;      /* categorical slot 2 */
+    --mem: #8c8c8c;      /* categorical slot 3 */
+    --good: #d0d0d0; --warning: #ffcd00; --serious: #ffcd00; --critical: #ffcd00;
+    --accent: #ffcd00;
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--page); color: var(--text-primary);
@@ -52,7 +52,7 @@
   @media (max-width: 810px) { .app-window .logo-text { display: none; } }
   .spacer { flex: 1; }
   .btn { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 7px 12px; }
-  .btn:hover { background: #2c2c2a; }
+  .btn:hover { background: #2c2c2c; }
   .btn.primary { background: var(--accent); border-color: transparent; color: #0b0b0b; font-weight: 600; }
   .btn.primary:hover { filter: brightness(1.08); }
   .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
@@ -84,7 +84,7 @@
   .card.dragging { outline-color: var(--accent); box-shadow: 0 24px 60px rgba(0,0,0,.65); position: relative; z-index: 4; will-change: transform; }
   .card.settling { position: relative; z-index: 3; }
   body.reordering, body.reordering * { cursor: grabbing !important; user-select: none; }
-  .dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; flex: none; background: var(--good); box-shadow: 0 0 0 3px rgba(12,163,12,0.18); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; flex: none; background: var(--good); box-shadow: 0 0 0 3px rgba(208,208,208,0.18); }
   .offline .dot { background: var(--text-muted); box-shadow: none; }
   .titles { flex: 1; min-width: 0; }
   .name { font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -147,7 +147,7 @@
   .off-pop { position: fixed; width: 300px; max-height: 60vh; overflow-y: auto; background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; padding: 4px; box-shadow: 0 12px 36px rgba(0,0,0,.55); z-index: 8; white-space: normal; -webkit-app-region: no-drag; }
   .off-pop h5 { margin: 6px 10px 4px; font-size: 10px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: .08em; }
   .off-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 6px; padding: 7px 4px 7px 10px; border-radius: 8px; cursor: pointer; }
-  .off-row:hover { background: #2c2c2a; }
+  .off-row:hover { background: #2c2c2c; }
   .off-row b { display: block; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .off-row small { display: block; font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .off-row .btn { height: 26px; padding: 0 9px; font-size: 12px; }
@@ -165,8 +165,8 @@
   .dlg-foot { display: flex; justify-content: flex-end; margin-top: 18px; }
   .menu { position: absolute; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 4px; z-index: 10; min-width: 150px; box-shadow: 0 8px 30px rgba(0,0,0,.5); }
   .menu button { display: block; width: 100%; text-align: left; background: none; border: 0; padding: 7px 10px; border-radius: 6px; }
-  .menu button:hover { background: #2c2c2a; }
-  .menu .danger { color: #e66767; }
+  .menu button:hover { background: #2c2c2c; }
+  .menu .danger { color: #ffcd00; }
   /* ---------- history page ---------- */
   .chart canvas { cursor: pointer; }
   body.history-mode #grid { display: none; }
@@ -231,7 +231,7 @@
   .tou { display: grid; grid-template-columns: repeat(3, max-content) 84px repeat(2, max-content); gap: 6px; align-items: center; }
   .tou-row { display: contents; }
   .tou input { width: 100%; box-sizing: border-box; }
-  .tou .bad select, .tou .bad input { border-color: var(--danger, #e5484d); }
+  .tou .bad select, .tou .bad input { border-color: var(--danger, #ffcd00); }
   .tou-other { grid-column: span 3; color: var(--text-secondary); font-size: 13px; padding-left: 2px; }
   .tou-add { margin-top: 8px; }
   .set-row.wrap { flex-wrap: wrap; row-gap: 8px; }
@@ -243,13 +243,13 @@
   header #addBtn { width: 34px; padding: 0; justify-content: center; }
   .pair { display: flex; align-items: baseline; gap: 12px; margin-top: 12px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; }
   .pair b { font-size: 22px; letter-spacing: .12em; font-variant-numeric: tabular-nums; }
-  header .view-btn.on { color: var(--accent); background: rgba(144,133,233,0.14); border-color: rgba(144,133,233,0.45); }
+  header .view-btn.on { color: var(--accent); background: rgba(255,205,0,0.14); border-color: rgba(255,205,0,0.45); }
   /* ---------- settings (app-only rows are hidden in a browser) ---------- */
   #settingsBtn { display: inline-flex; background: none; border-color: transparent; color: var(--text-muted); padding: 7px; }
   #settingsBtn:hover { color: var(--text-primary); background: var(--surface-2); }
   html:not(.has-settings) .app-only { display: none !important; }
-  #updateBtn { color: var(--good); background: rgba(12,163,12,0.12); border-color: rgba(12,163,12,0.5); font-weight: 600; }
-  #updateBtn:hover:not(:disabled) { background: rgba(12,163,12,0.2); }
+  #updateBtn { color: var(--good); background: rgba(208,208,208,0.12); border-color: rgba(208,208,208,0.5); font-weight: 600; }
+  #updateBtn:hover:not(:disabled) { background: rgba(208,208,208,0.2); }
   #updateBtn:disabled { opacity: .75; cursor: default; }
   #updateBtn[hidden] { display: none; }
   @media (max-width: 700px) { #updateBtn .short { display: none; } }   /* icon only */
@@ -272,7 +272,7 @@
   .switch:disabled { opacity: .5; cursor: default; }
   #settingsDlg .dlg-foot { align-items: center; gap: 8px; border-top: 1px solid var(--border); padding-top: 14px; margin-top: 6px; }
   .legacy-banner { display: flex; align-items: center; gap: 12px; margin: 20px 24px 0; padding: 12px 14px; border-radius: 10px;
-    background: rgba(250,178,25,0.08); border: 1px solid rgba(250,178,25,0.35); }
+    background: rgba(255,205,0,0.08); border: 1px solid rgba(255,205,0,0.35); }
   .legacy-banner[hidden] { display: none; }
   .legacy-banner svg { color: var(--warning); flex: none; }
   .legacy-banner span { flex: 1; min-width: 0; }
@@ -288,6 +288,7 @@
   </div>
   <button class="summary" id="summary" aria-haspopup="true" aria-expanded="false"><span id="summaryText"></span><span class="short" id="summaryShort"></span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></button>
   <div class="spacer"></div>
+  <a class="btn" href="/support" style="text-decoration:none;color:inherit">Support</a>
   <button class="btn view-btn" id="historyBtn" title="History" aria-label="History" aria-pressed="false"><svg class="ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/></svg></button>
   <button class="btn view-btn" id="advBtn" title="Advanced: power, electricity cost and usage totals" aria-label="Advanced" aria-pressed="false"><svg class="ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z"/></svg></button>
   <button class="btn primary" id="addBtn" title="Add device" aria-label="Add device"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
@@ -883,13 +884,13 @@ function hubOrigins() {
 }
 function updateCmd() {
   const hub = $('#hubSel').value;
-  const t = info.token;
+  const t = info.joinKey || info.token;
   $('#cmd').textContent = osTab === 'win'
     ? `irm "${hub}/install.ps1?token=${t}" | iex`
     : `curl -fsSL "${hub}/install.sh?token=${t}" | bash`;
   $('#cmdRow').style.display = osTab === 'app' ? 'none' : '';
   $('#pairRow').hidden = osTab !== 'app';
-  $('#viewUrl').textContent = `${hub}/?key=${t}`;
+  $('#viewUrl').textContent = `${hub}/?key=${info.token}`;
   if (osTab === 'app') {
     $('#cmdHint').innerHTML = 'On the other computer, open <a href="' + esc(hub) + '/download" target="_blank" style="color:var(--accent)">' + esc(hub) + '/download</a> to install the <b>Device Monitor</b> app, then open it and choose <b>Connect to a hub</b>. It finds this hub automatically, or enter <b>' + esc(hub.replace('http://', '')) + '</b>, then type the pairing code below. That computer then shows up here and can view the dashboard too.';
     showPairCode();
@@ -1548,7 +1549,7 @@ fetch('/api/energy/settings').then(r => r.json()).then(s => { energy.saved = s; 
 // ---------- advanced page: power, cost and usage totals ----------
 const adv = { range: store.get('advRange') || '7d', data: null, timer: null, seq: 0, hover: null, live: null };
 if (!['24h', '7d', '30d'].includes(adv.range)) adv.range = '7d';
-const DEVICE_COLORS = ['--cpu', '--gpu', '--mem', '--accent', '--warning', '--serious', '#4fb3bf', '#c97fd0'];
+const DEVICE_COLORS = ['--cpu', '--gpu', '--mem', '--accent', '--warning', '--serious', '#6e6e6e', '#a8a8a8'];
 const cssColor = c => c.startsWith('--') ? `var(${c})` : c;
 
 $('#advBtn').addEventListener('click', () => { location.hash = $('#advView').hidden ? '#/advanced' : '#/'; });

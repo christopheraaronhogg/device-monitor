@@ -4,12 +4,15 @@
 # Written for the bash 3.2 and BSD tools that ship with macOS.
 DIR="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$DIR/config" ] && . "$DIR/config"
-HUB="${1:-$HUB}"; TOKEN="${2:-$TOKEN}"; INTERVAL="${INTERVAL:-2}"
+HUB="${1:-$HUB}"; TOKEN="${2:-$TOKEN}"; INTERVAL="${INTERVAL:-5}"
 if [ -z "$HUB" ] || [ -z "$TOKEN" ]; then echo "usage: $0 <hub> <token>"; exit 1; fi
 HUB="${HUB%/}"
 export LC_ALL=C
 export PATH="$PATH:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin"   # launchd gives a minimal PATH
 
+. "$DIR/agent-support.sh"
+# System Events asks for an Automation permission the first time; root is not needed.
+dm_restart() { osascript -e 'tell application "System Events" to restart'; }
 esc() { printf '%s' "$1" | tr -d '"\\' | tr -d '[:cntrl:]'; }   # strip chars that would break JSON
 num() { case "$1" in ''|*[!0-9.-]*) echo null ;; *) echo "$1" ;; esac; }
 now() { perl -MTime::HiRes=time -e 'printf "%.3f", time' 2>/dev/null || date +%s; }
@@ -67,8 +70,10 @@ gpus_json() {
     END { flush() }'
 }
 disks_json() {   # APFS: report the container (total - available), like Finder does
-  df -k -l | awk 'NR > 1 {
+  local ro; ro="$(mount | awk -F' on | \\(' '/read-only/ { print $2 }')"
+  df -k -l | RO="$ro" awk 'BEGIN { n_ro = split(ENVIRON["RO"], r, "\n"); for (i = 1; i <= n_ro; i++) skip[r[i]] = 1 } NR > 1 {
       mount = $9; for (i = 10; i <= NF; i++) mount = mount " " $i
+      if (mount in skip) next
       if (mount == "/System/Volumes/Data") name = "Macintosh HD"
       else if (mount ~ /^\/Volumes\//) { name = mount; sub(/^\/Volumes\//, "", name) }
       else next
@@ -155,6 +160,7 @@ while true; do
   if [ -n "$PY3" ] && [ $((AI_N++ % 5)) -eq 0 ]; then AI="$("$PY3" -c "$AI_PY" 2>/dev/null)"; fi
   # Exit with the desktop app that started us (if any).
   if [ -n "$PARENT_PID" ] && ! kill -0 "$PARENT_PID" 2>/dev/null; then exit 0; fi
+  dm_inventory_tick inventory-macos.sh
   CPU="$(cpu_usage)"   # takes ~1s
   T="$(now)"; CUR_NET="$(read_net)"; CUR_DISK="$(read_disk)"
   set -- $PREV_NET $CUR_NET $PREV_DISK $CUR_DISK
@@ -168,7 +174,7 @@ while true; do
   [ -n "$SMCTEMP" ] && CPU_TEMP="$(num "$("$SMCTEMP" -c 2>/dev/null | head -1)")"
   UPTIME=$(( $(date +%s) - ${BOOT:-$(date +%s)} ))
 
-  BODY="{\"id\":\"$(esc "$ID")\",\"token\":\"$TOKEN\",\"hostname\":\"$(esc "$HOST")\",\"platform\":\"macos\",\"appVersion\":\"$(esc "${DM_APP_VERSION:-}")\",\"os\":\"$(esc "$OS")\",\"formFactor\":\"$FORM\",\"uptime\":$UPTIME,\"cpu\":{\"name\":\"$(esc "$CPU_NAME")\",\"threads\":$(num "$THREADS"),\"clockMHz\":null,\"temp\":$CPU_TEMP,\"usage\":$CPU,\"cores\":[]},\"memory\":{\"total\":$MEM_TOTAL,\"used\":$(memory_used)},\"gpus\":[$(gpus_json)],\"disks\":[$(disks_json)],$RATES,\"ai\":${AI:-null}}"
-  curl -fsS -m 5 -X POST -H 'Content-Type: application/json' --data-binary "$BODY" "$HUB/api/report" >/dev/null 2>&1
+  BODY="{\"id\":\"$(esc "$ID")\",\"token\":\"$TOKEN\",\"hostname\":\"$(esc "$HOST")\",\"platform\":\"macos\",\"appVersion\":\"$AGENT_VERSION\",\"os\":\"$(esc "$OS")\",\"formFactor\":\"$FORM\",\"uptime\":$UPTIME,\"cpu\":{\"name\":\"$(esc "$CPU_NAME")\",\"threads\":$(num "$THREADS"),\"clockMHz\":null,\"temp\":$CPU_TEMP,\"usage\":$CPU,\"cores\":[]},\"memory\":{\"total\":$MEM_TOTAL,\"used\":$(memory_used)},\"gpus\":[$(gpus_json)],\"disks\":[$(disks_json)],$RATES,\"ai\":${AI:-null},$DM_EXTRA}"
+  dm_send_report "$BODY"
   sleep $(( INTERVAL > 1 ? INTERVAL - 1 : 1 ))
 done

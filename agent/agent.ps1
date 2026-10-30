@@ -4,7 +4,7 @@
 param(
   [string]$Hub,
   [string]$Token,
-  [int]$Interval = 2,
+  [int]$Interval = 5,
   [int]$ParentPid = 0   # set by the desktop app: exit when the app goes away
 )
 $ErrorActionPreference = 'SilentlyContinue'
@@ -12,11 +12,15 @@ $ProgressPreference = 'SilentlyContinue'
 
 $cfgPath = Join-Path $PSScriptRoot 'config.json'
 if (-not $Token -and $env:DM_TOKEN) { $Token = $env:DM_TOKEN }   # set by the desktop app
-if ((-not $Hub -or -not $Token) -and (Test-Path $cfgPath)) {
+$dmActions = @()
+if (Test-Path $cfgPath) {
   $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
   if (-not $Hub) { $Hub = $cfg.hub }
   if (-not $Token) { $Token = $cfg.token }
+  $dmActions = @($cfg.actions | Where-Object { $_ -in 'restart', 'script' })
 }
+. (Join-Path $PSScriptRoot 'agent-support.ps1')
+$dmScripts = @(if ($dmActions -contains 'script') { Get-DmScripts $PSScriptRoot })
 if (-not $Hub -or -not $Token) { Write-Error 'Hub and Token are required'; exit 1 }
 $Hub = $Hub.TrimEnd('/')
 
@@ -43,7 +47,7 @@ function Get-HwSensors {
     $s = Get-CimInstance -Namespace $ns -ClassName Sensor -ErrorAction SilentlyContinue
     if ($s) { return $s }
   }
-  return $null
+  return Get-DmLhmSensors
 }
 
 # AI models loaded in Ollama, LM Studio or ComfyUI (checked every 5th report).
@@ -109,11 +113,15 @@ $ai = @(); $aiTick = 0
 while ($true) {
   if ($ParentPid -and -not (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue)) { exit 0 }
   $now = [DateTime]::UtcNow
+  Start-DmInventoryIfDue $PSScriptRoot
+  Update-DmRunning $Hub $deviceId $Token
   $payload = [ordered]@{
     id = $deviceId; token = $Token; hostname = $env:COMPUTERNAME; platform = 'windows'; os = $osName
     uptime = [int]((Get-Date) - $osInfo.LastBootUpTime).TotalSeconds; formFactor = $formFactor
   }
-  if ($env:DM_APP_VERSION) { $payload.appVersion = $env:DM_APP_VERSION }   # set when run by the desktop app
+  $payload.appVersion = if ($env:DM_APP_VERSION) { $env:DM_APP_VERSION } else { $script:DmVersion }
+  $payload.actions = $dmActions; $payload.scripts = $dmScripts
+  $payload.features = @($(if ($dmActions.Count) { 'actions' }))
 
   # ---- CPU (raw counters -> exact deltas) ----
   $raw = Get-CimInstance Win32_PerfRawData_PerfOS_Processor
@@ -217,8 +225,9 @@ while ($true) {
   if ($null -ne $usage) {
     try {
       $json = $payload | ConvertTo-Json -Depth 6 -Compress
-      Invoke-RestMethod -Uri "$Hub/api/report" -Method Post -Body ([Text.Encoding]::UTF8.GetBytes($json)) -ContentType 'application/json' -TimeoutSec 5 | Out-Null
-    } catch { }
+      $reply = Invoke-RestMethod -Uri "$Hub/api/report" -Method Post -Body ([Text.Encoding]::UTF8.GetBytes($json)) -ContentType 'application/json' -TimeoutSec 5
+      foreach ($c in @($reply.commands)) { if ($c) { Invoke-DmCommand $PSScriptRoot $Hub $deviceId $Token $dmActions $c } }
+    } catch { Set-Content (Join-Path $PSScriptRoot 'last-error.txt') "$([DateTime]::UtcNow.ToString('o')) $($_.Exception.Message)" -ErrorAction SilentlyContinue }
   }
   $elapsed = ([DateTime]::UtcNow - $now).TotalMilliseconds
   Start-Sleep -Milliseconds ([math]::Max(200, $Interval * 1000 - $elapsed))

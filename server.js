@@ -13,10 +13,11 @@ const { Alerts } = require('./alerts');
 const { readJson, writeJson } = require('./safe-json');
 const tailscale = require('./tailscale');
 const sec = require('./security');
+const support = require('./support');
 
 const LIVE_HISTORY_MS = 10 * 60 * 1000; // raw samples sent to dashboards on connect
 const RANGES = { '10m': 10 * 60e3, '1h': 60 * 60e3, '6h': 6 * 3600e3, '24h': 24 * 3600e3, '7d': 7 * 86400e3, '30d': 30 * 86400e3 };
-const OFFLINE_MS = 10000;
+const OFFLINE_MS = 30000;
 const MAX_DEVICES = 250;      // caps registry/history growth from bogus reports
 const MAX_STREAMS = 64;       // concurrent dashboard connections
 const COMMAND_TTL = 60e3;     // power actions not picked up by the device within a minute are dropped
@@ -46,7 +47,7 @@ function lanAddresses() {
 const hubProof = (token, nonce) => crypto.createHmac('sha256', String(token)).update('device-monitor-hub:' + nonce).digest('hex');
 
 // Starts the hub. Resolves with { port, token, close } once listening.
-function startHub({ port = 7777, dataDir, rootDir = __dirname, assetDir = rootDir } = {}) {
+function startHub({ port = 7777, dataDir, rootDir = __dirname, assetDir = rootDir, bind = ['::'], strict = false, allowLan = false, discovery: useDiscovery = true, alertSink = null, offlineQuiet = () => false } = {}) {
 const PORT = port;
 const ROOT = assetDir;
 const DATA_DIR = dataDir || path.join(rootDir, 'data');
@@ -85,10 +86,20 @@ try { downloadsWatch = fs.watch(DOWNLOADS_DIR, () => { clearTimeout(watchTimer);
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const config = readJson(CONFIG_FILE, {});
+const saveConfig = () => { writeJson(CONFIG_FILE, config); fs.chmodSync(CONFIG_FILE, 0o600); };
 if (!config.token) {
   config.token = crypto.randomBytes(12).toString('hex');
-  writeJson(CONFIG_FILE, config);
+  saveConfig();
 }
+if (strict) fs.chmodSync(DATA_DIR, 0o700);
+const deviceKeys = new support.DeviceKeys(path.join(DATA_DIR, 'device-keys.json'));
+const joinKey = new support.JoinKey(config, saveConfig);
+const audit = new support.Audit(path.join(DATA_DIR, 'audit.jsonl'));
+const inventory = new support.InventoryStore(path.join(DATA_DIR, 'inventory'));
+const VETTED = support.vettedScripts(path.join(ROOT, 'agent'));
+const results = [];
+const sentCommands = new Map();
+const TOOLS = readJson(path.join(ROOT, 'deploy', 'windows-tools.json'), {});
 
 // id -> { id, name, hostname, platform, firstSeen, lastSeen }
 const registry = Object.create(null);   // null prototype: ids like __proto__ can't reach Object.prototype
@@ -172,7 +183,8 @@ function requestKey(req) {
   const auth = String(req.headers.authorization || '');
   return auth.startsWith('Bearer ') ? auth.slice(7).trim() : sec.cookie(req.headers.cookie, 'dm_key');
 }
-const authorized = req => isLoopback(req) || keyOk(requestKey(req));
+const isAdmin = req => keyOk(requestKey(req));
+const authorized = req => (!strict && isLoopback(req)) || isAdmin(req);
 const keyCookie = req => `dm_key=${config.token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=34560000${req.headers['x-forwarded-proto'] === 'https' ? '; Secure' : ''}`;
 
 // Desktop apps join with a short one-time code shown in the hub's Add device dialog, so the key
@@ -190,7 +202,7 @@ function template(file, vars) {
   return text;
 }
 
-function handleReport(raw) {
+function handleReport(raw, addr) {
   if (!sec.isValidId(raw.id)) throw new Error('invalid id');
   const id = raw.id;
   if (!registry[id] && Object.keys(registry).length >= MAX_DEVICES) throw new Error('too many devices');
@@ -198,6 +210,8 @@ function handleReport(raw) {
   const now = Date.now();
   const nextOrder = () => Math.max(-1, ...Object.values(registry).map(r => r.order ?? -1)) + 1;
   const reg = registry[id] || (registry[id] = { id, name: body.hostname || id, firstSeen: now, order: nextOrder() });
+  reg.addr = String(addr || '').replace(/^::ffff:/, '');
+  reg.scripts = support.normalizeScripts(raw.scripts);
   reg.hostname = body.hostname;
   if (!reg.renamed && body.hostname) reg.name = body.hostname;
   reg.platform = body.platform;
@@ -236,9 +250,16 @@ function handleReport(raw) {
   // The reply tells the agent what the dashboards want from it.
   const reply = { ok: true };
   if ((procWatch.get(id) || 0) > now) reply.procs = true;
-  const queued = (commands.get(id) || []).filter(c => now - c.t < COMMAND_TTL && body.actions.includes(c.action));
+  const queued = sec.isTailnetOrLoopback(addr) ? (commands.get(id) || []).filter(c => now - c.t < COMMAND_TTL && body.actions.includes(c.action)) : [];
   commands.delete(id);
-  if (queued.length) reply.commands = queued.map(({ id: cid, action }) => ({ id: cid, action }));
+  if (queued.length) {
+    reply.commands = queued.map(({ id: cid, action, script }) => ({ id: cid, action, script: script || null }));
+    reply.cmds = queued.map(c => `${c.id} ${c.action} ${c.script || '-'}`).join(';');
+    for (const c of queued) {
+      sentCommands.set(c.id, { device: id, action: c.action, script: c.script || null, t: now });
+      audit.add({ kind: 'delivered', device: id, name: reg.name, cmd: c.id, action: c.action, script: c.script || null });
+    }
+  }
   return reply;
 }
 
@@ -263,7 +284,7 @@ function costToday(id) {
   return { cost, currency: config.energy.currency };
 }
 const alerts = new Alerts({
-  dataDir: DATA_DIR, broadcast, costToday, hubUrl: preferredHubUrl,
+  dataDir: DATA_DIR, broadcast, costToday, hubUrl: preferredHubUrl, sink: alertSink, offlineQuiet,
   devices: () => Object.keys(registry).map(id => ({ id, name: registry[id].name, online: Date.now() - (registry[id].lastSeen || 0) < OFFLINE_MS, lastSeen: registry[id].lastSeen })),
 });
 
@@ -338,7 +359,7 @@ const server = http.createServer(async (req, res) => {
   if (!sec.hostAllowed(req.headers.host, (config.allowedHosts || []).concat(remote.dnsName || []))) {
     return send(res, 421, 'This hub only answers requests addressed to it by IP address or its own name.', 'text/plain');
   }
-  if (!sec.isLocalAddress(req.socket.remoteAddress)) {
+  if (strict && !allowLan ? !sec.isTailnetOrLoopback(req.socket.remoteAddress) : !sec.isLocalAddress(req.socket.remoteAddress)) {
     return send(res, 403, 'This hub only accepts connections from your own network and Tailscale.', 'text/plain');
   }
   if (req.method !== 'GET' && req.method !== 'HEAD' && !sec.sameOrigin(req)) return send(res, 403, { error: 'cross-site request refused' });
@@ -355,6 +376,9 @@ const server = http.createServer(async (req, res) => {
         return res.end();
       }
       return authorized(req) ? sendHtml(res, 'index.html') : sendHtml(res, 'locked.html', 401);
+    }
+    if (req.method === 'GET' && (p === '/support' || p === '/support/')) {
+      return authorized(req) ? sendHtml(res, 'support.html') : sendHtml(res, 'locked.html', 401);
     }
     if (req.method === 'GET' && (p === '/download' || p === '/download/')) {
       return sendHtml(res, 'download.html');
@@ -389,12 +413,45 @@ const server = http.createServer(async (req, res) => {
         const proof = nonce && /^[a-f0-9]{16,64}$/.test(nonce) ? hubProof(config.token, nonce) : undefined;
         return send(res, 200, { app: 'device-monitor', hostname: os.hostname(), port: PORT, locked: true, proof });
       }
-      return send(res, 200, { token: config.token, port: PORT, addresses: lanAddresses(), hostname: os.hostname(), remote: { urls: remote.urls || [] } });
+      return send(res, 200, { token: config.token, joinKey: joinKey.current().key, port: PORT, addresses: lanAddresses(), hostname: os.hostname(), remote: { urls: remote.urls || [] } });
     }
     if (req.method === 'POST' && p === '/api/report') {
       const body = await readBody(req);
-      if (!body || typeof body !== 'object' || !keyOk(body.token)) return send(res, 401, { error: 'bad token' });
-      return send(res, 200, handleReport(body));
+      if (!body || typeof body !== 'object' || !(deviceKeys.check(body.id, body.token) || (!strict && keyOk(body.token)))) return send(res, 401, { error: 'bad token' });
+      return send(res, 200, handleReport(body, req.socket.remoteAddress));
+    }
+    if (req.method === 'POST' && p === '/api/enroll') {
+      const body = await readBody(req);
+      if (!body || typeof body !== 'object' || !joinKey.valid(String(body.enroll ?? ''))) return send(res, 403, { error: 'Join key is wrong or expired. Run: device-monitor-hub join' });
+      if (!sec.isValidId(body.id)) return send(res, 400, { error: 'invalid id' });
+      if (!registry[body.id] && Object.keys(registry).length >= MAX_DEVICES) return send(res, 400, { error: 'too many devices' });
+      const reenrolled = !!deviceKeys.keys[body.id];
+      const key = deviceKeys.issue(body.id);
+      audit.add({ kind: reenrolled ? 're-enrolled' : 'enrolled', device: body.id, name: String(body.hostname || '').slice(0, 64), from: req.socket.remoteAddress });
+      return send(res, 200, { key });
+    }
+    if (req.method === 'POST' && p === '/api/inventory') {
+      const body = await readBody(req);
+      if (!body || typeof body !== 'object' || !deviceKeys.check(body.id, body.token) || !registry[body.id]) return send(res, 401, { error: 'bad token' });
+      const inv = support.normalizeInventory(body.inventory);
+      if (!inv) return send(res, 400, { error: 'invalid inventory' });
+      inventory.save(body.id, inv);
+      broadcast({ type: 'inventory', id: body.id, summary: inventory.summary(body.id) });
+      return send(res, 200, { ok: true });
+    }
+    if (req.method === 'POST' && p === '/api/result') {
+      const body = await readBody(req);
+      if (!body || typeof body !== 'object' || !deviceKeys.check(body.id, body.token)) return send(res, 401, { error: 'bad token' });
+      const sent = sentCommands.get(String(body.cmd));
+      if (!sent || sent.device !== body.id) return send(res, 404, { error: 'unknown command' });
+      sentCommands.delete(String(body.cmd));
+      const name = registry[body.id]?.name || body.id;
+      const r = { t: Date.now(), cmd: String(body.cmd), device: body.id, name, action: sent.action, script: sent.script, ok: body.ok === true, message: String(body.message ?? '').slice(0, 300), output: String(body.output ?? '').slice(0, 16000) };
+      results.push(r);
+      if (results.length > 50) results.shift();
+      audit.add({ kind: 'result', device: body.id, name, cmd: r.cmd, action: r.action, script: r.script, ok: r.ok, message: r.message });
+      broadcast({ type: 'actionResult', id: body.id, name, result: { id: r.cmd, ok: r.ok, message: r.message } });
+      return send(res, 200, { ok: true });
     }
     if (req.method === 'POST' && p === '/api/pair') {
       const { code } = await readBody(req);
@@ -409,16 +466,52 @@ const server = http.createServer(async (req, res) => {
     }
     // Installer / agent scripts. The installer needs the token; the raw agent does not contain it.
     if (req.method === 'GET' && (p === '/install.ps1' || p === '/install.sh')) {
-      if (!keyOk(url.searchParams.get('token'))) return send(res, 403, 'echo "Invalid or missing token"\n', 'text/plain');
-      return send(res, 200, template(path.basename(p), { HUB: hubUrlFor(req), TOKEN: config.token }), 'text/plain; charset=utf-8');
+      const given = url.searchParams.get('token');
+      if (!keyOk(given) && !joinKey.valid(given)) return send(res, 403, 'echo "Invalid or expired join key. On the hub run: device-monitor-hub join"\n', 'text/plain');
+      const platforms = p === '/install.ps1' ? ['windows'] : ['macos', 'linux'];
+      const scriptVars = Object.fromEntries(platforms.map(pl => [`SCRIPTS_${pl.toUpperCase()}`, Object.keys(VETTED[pl]).join(' ')]));
+      return send(res, 200, template(path.basename(p), {
+        HUB: hubUrlFor(req), ENROLL: joinKey.current().key, ACTIONS: url.searchParams.get('actions') === '1' ? 'restart script' : '',
+        LHM_SHA: TOOLS.lhm?.sha256 || '', PAWNIO_SHA: TOOLS.pawnio?.sha256 || '', ...scriptVars,
+      }), 'text/plain; charset=utf-8');
     }
-    if (req.method === 'GET' && (p === '/agent.ps1' || p === '/agent.sh' || p === '/agent-macos.sh' || p === '/uninstall.ps1' || p === '/uninstall.sh')) {
+    const vs = p.match(/^\/agent\/scripts\/(windows|macos|linux)\/([a-z0-9-]+)$/);
+    if (req.method === 'GET' && vs && Object.hasOwn(VETTED[vs[1]], vs[2])) {
+      return send(res, 200, fs.readFileSync(VETTED[vs[1]][vs[2]].file), 'text/plain; charset=utf-8');
+    }
+    if (req.method === 'GET' && (p === '/agent.ps1' || p === '/agent-support.ps1' || p === '/inventory.ps1' || p === '/agent.sh' || p === '/agent-macos.sh' || p === '/agent-support.sh' || p === '/inventory-linux.sh' || p === '/inventory-macos.sh' || p === '/uninstall.ps1' || p === '/uninstall.sh')) {
       return send(res, 200, fs.readFileSync(path.join(ROOT, 'agent', path.basename(p))), 'text/plain; charset=utf-8');
     }
 
     // ---- everything else needs the key ----
     if (!authorized(req)) return send(res, 401, { error: 'This dashboard is locked. Open it with the dashboard link from the Device Monitor app.' });
+    if (req.method === 'POST' && p === '/api/join/new') {
+      const j = joinKey.rotate();
+      audit.add({ kind: 'join-key-rotated', from: req.socket.remoteAddress });
+      return send(res, 200, j);
+    }
+    if (req.method === 'GET' && p === '/api/join') return send(res, 200, joinKey.current());
+    if (req.method === 'POST' && p === '/api/admin/rotate') {
+      config.token = crypto.randomBytes(16).toString('hex');
+      saveConfig();
+      audit.add({ kind: 'admin-key-rotated', from: req.socket.remoteAddress });
+      return send(res, 200, { ok: true });
+    }
+    if (req.method === 'GET' && p === '/api/support') {
+      return send(res, 200, {
+        devices: Object.keys(registry).map(id => {
+          const v = deviceView(id), { history: _h, ...rest } = v;
+          const pf = VETTED[v.platform] || {};
+          const scripts = (v.latest?.actions?.includes('script') ? (registry[id].scripts || []) : []).map(s => ({ name: s.name, desc: pf[s.name]?.desc || s.name, vetted: pf[s.name]?.sha === s.sha }));
+          return { ...rest, inventory: inventory.summary(id), scripts, actionsOverTailnet: sec.isTailnetOrLoopback(registry[id].addr) };
+        }),
+        alerts: alerts.active(),
+        audit: audit.recent(60),
+        results: results.slice(-20).reverse(),
+      });
+    }
     if (req.method === 'POST' && p === '/api/pair/code') {
+      if (strict) return send(res, 404, { error: 'not found' });
       pairing = { code: String(crypto.randomInt(0, 1e6)).padStart(6, '0'), expires: Date.now() + PAIR_MS, tries: 0 };
       return send(res, 200, { code: pairing.code, expires: pairing.expires });
     }
@@ -487,6 +580,9 @@ const server = http.createServer(async (req, res) => {
       const points = Math.max(10, Math.min(3000, Number(url.searchParams.get('points')) || 1200));
       return send(res, 200, history.query(hid, from, to, points));
     }
+    const im = p.match(/^\/api\/devices\/([^/]+)\/inventory$/);
+    const iid = im && deviceFromPath(im[1]);
+    if (req.method === 'GET' && iid) return send(res, 200, inventory.get(iid) || { apps: [], updates: { checked: false, count: 0, items: [] }, hotfixes: [] });
     const pm = p.match(/^\/api\/devices\/([^/]+)\/(processes|action)$/);
     const pid = pm && deviceFromPath(pm[1]);
     if (pid && pm[2] === 'processes' && req.method === 'GET') {
@@ -495,19 +591,34 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { procs: l.procs && Date.now() - l.procs.t < PROCS_WATCH_MS ? l.procs : null, supported: !!l.latest?.features?.includes('procs'), threads: l.latest?.cpu?.threads ?? null });
     }
     if (pid && pm[2] === 'action' && req.method === 'POST') {
-      const { action } = await readBody(req);
+      const { action, script, confirm } = await readBody(req);
       const reg = registry[pid], latest = live[pid]?.latest;
+      if (!isAdmin(req)) return send(res, 401, { error: 'Actions need the admin key.' });
+      const from = req.socket.remoteAddress;
+      if (!sec.isTailnetOrLoopback(from)) return send(res, 403, { error: 'Actions only work over Tailscale.' });
+      const refuse = (status, error) => { audit.add({ kind: 'refused', device: pid, name: reg.name, action: String(action).slice(0, 20), from, error }); return send(res, status, { error }); };
       if (action === 'wake') {
         if (!reg.macs?.length) return send(res, 400, { error: "This device hasn't reported a network card address yet." });
         await discovery.wake(reg.macs);
+        audit.add({ kind: 'requested', device: pid, name: reg.name, action, from });
         broadcast({ type: 'actionResult', id: pid, name: reg.name, result: { ok: true, message: 'Wake-up signal sent.' } });
         return send(res, 200, { ok: true });
       }
-      if (!sec.ACTIONS.has(action)) return send(res, 400, { error: 'unknown action' });
-      if (!deviceView(pid).online) return send(res, 409, { error: `${reg.name} is offline.` });
-      if (!latest?.actions?.includes(action)) return send(res, 409, { error: `Remote power control is turned off on ${reg.name}.` });
-      const cmd = { id: crypto.randomBytes(6).toString('hex'), action, t: Date.now() };
-      commands.set(pid, (commands.get(pid) || []).filter(c => c.action !== action).concat(cmd));
+      if (!sec.ACTIONS.has(action)) return refuse(400, 'unknown action');
+      if (!deviceView(pid).online) return refuse(409, `${reg.name} is offline.`);
+      if (!latest?.actions?.includes(action)) return refuse(409, `${action} is turned off on ${reg.name}. Re-run the join command with actions on that PC.`);
+      if (!sec.isTailnetOrLoopback(reg.addr)) return refuse(409, `${reg.name} reports over the LAN, not Tailscale, so actions are off.`);
+      if (action !== 'script' && confirm !== reg.name) return refuse(400, `Type the device name (${reg.name}) to confirm.`);
+      if (action === 'script') {
+        const vetted = (VETTED[reg.platform] || {})[script];
+        const has = (reg.scripts || []).find(s => s.name === script);
+        if (typeof script !== 'string' || !vetted || !Object.hasOwn(VETTED[reg.platform], script)) return refuse(400, 'That script is not on the vetted list.');
+        if (!has) return refuse(409, `${reg.name} doesn't have that script. Re-run the join command on it.`);
+        if (has.sha !== vetted.sha) return refuse(409, `The copy of that script on ${reg.name} doesn't match the vetted one. Re-run the join command on it.`);
+      }
+      const cmd = { id: crypto.randomBytes(6).toString('hex'), action, script: action === 'script' ? script : null, t: Date.now() };
+      commands.set(pid, (commands.get(pid) || []).filter(c => c.action !== action || c.script !== cmd.script).concat(cmd));
+      audit.add({ kind: 'requested', device: pid, name: reg.name, cmd: cmd.id, action, script: cmd.script, from });
       return send(res, 200, { ok: true, id: cmd.id });
     }
     const m = p.match(/^\/api\/devices\/([^/]+)$/);
@@ -516,12 +627,17 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'PATCH') {
         const body = await readBody(req);
         if (typeof body.name === 'string' && body.name.trim()) { registry[id].name = body.name.trim().slice(0, 60); registry[id].renamed = true; }
+        const fields = support.validDeviceFields(body);
+        if (!fields) return send(res, 400, { error: 'Invalid SSH user or RustDesk ID.' });
+        Object.assign(registry[id], fields);
         saveRegistry();
         broadcast({ type: 'device', device: deviceView(id) });
         return send(res, 200, deviceView(id));
       }
       if (req.method === 'DELETE') {
         delete registry[id]; delete live[id]; history.remove(id); alerts.removeDevice(id); commands.delete(id); procWatch.delete(id);
+        deviceKeys.remove(id); inventory.remove(id);
+        audit.add({ kind: 'device-removed', device: id, from: req.socket.remoteAddress });
         saveRegistry();
         broadcast({ type: 'removed', id });
         return send(res, 200, { ok: true });
@@ -534,15 +650,17 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-return new Promise((resolve, reject) => {
-  server.once('error', reject);
-  server.listen(PORT, '::', () => { // dual-stack: IPv4 + IPv6
-    const responder = discovery.respond({ port: PORT });
-    resolve({
-      port: PORT, token: config.token, addresses: lanAddresses(),
-      close: () => { if (saveTimer) { clearTimeout(saveTimer); writeJson(DEVICES_FILE, registry); } alerts.close(); clearInterval(remoteTimer); downloadsWatch?.close(); clearTimeout(watchTimer); history.close(); responder.close(); clearInterval(statusTimer); for (const c of clients) c.destroy(); server.close(); },
-    });
-  });
+const servers = bind.map((_, i) => (i === 0 ? server : http.createServer((req, res) => server.emit('request', req, res))));
+return Promise.all(servers.map((s, i) => new Promise((ok, fail) => {
+  s.once('error', fail);
+  s.listen(PORT, bind[i], ok);
+}))).then(() => {
+  const responder = useDiscovery ? discovery.respond({ port: PORT }) : { close() {} };
+  return {
+    port: PORT, token: config.token, addresses: lanAddresses(), bound: bind,
+    localAgentKey: id => deviceKeys.issue(id),
+    close: () => { if (saveTimer) { clearTimeout(saveTimer); writeJson(DEVICES_FILE, registry); } alerts.close(); clearInterval(remoteTimer); downloadsWatch?.close(); clearTimeout(watchTimer); history.close(); responder.close(); clearInterval(statusTimer); for (const c of clients) c.destroy(); for (const s of servers) s.close(); },
+  };
 });
 }
 
@@ -550,14 +668,14 @@ module.exports = { startHub, lanAddresses, hubProof };
 
 // Headless mode: `node server.js` (e.g. on a home server). Also monitors this machine.
 if (require.main === module) {
+  const { headlessOptions, localMachineId } = require('./headless');
   const port = Number(process.env.PORT) || 7777;
-  startHub({ port }).then(hub => {
+  headlessOptions(process.env).then(opts => startHub({ port, ...opts })).then(hub => {
     console.log('Device Monitor hub running');
-    console.log(`  This PC:       http://localhost:${port}`);
-    for (const a of hub.addresses) console.log(`  Other devices: http://${a.address}:${port}   (${a.name})`);
-    if (!process.env.NO_LOCAL_AGENT) startAgent({ hub: `http://127.0.0.1:${port}`, token: hub.token, scriptDir: path.join(__dirname, 'agent') });
+    for (const a of hub.bound) console.log(`  Listening on: ${a}:${port}`);
+    if (!process.env.NO_LOCAL_AGENT) startAgent({ hub: `http://127.0.0.1:${port}`, token: hub.localAgentKey(localMachineId()), scriptDir: path.join(__dirname, 'agent') });
   }, e => {
-    console.error(e.code === 'EADDRINUSE' ? `Port ${port} is already in use — is the hub already running?` : e);
+    console.error(e.code === 'EADDRINUSE' ? `Port ${port} is already in use — is the hub already running?` : e.code === 'EADDRNOTAVAIL' ? 'The Tailscale address is not up yet.' : e);
     process.exit(1);
   });
   process.on('SIGINT', () => process.exit());

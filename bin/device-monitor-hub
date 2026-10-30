@@ -1,0 +1,67 @@
+#!/usr/bin/env node
+const fs = require('fs');
+const path = require('path');
+const { execFileSync } = require('child_process');
+
+const dataDir = process.env.DM_DATA_DIR || path.join(process.env.HOME, '.local/share/device-monitor-hub');
+const port = Number(process.env.PORT) || 7777;
+const local = `http://127.0.0.1:${port}`;
+const config = () => {
+  try { return JSON.parse(fs.readFileSync(path.join(dataDir, 'config.json'), 'utf8')); }
+  catch { console.error(`No hub data in ${dataDir}. Is the hub installed?`); process.exit(1); }
+};
+const api = async (method, p) => {
+  const r = await fetch(local + p, { method, headers: { Authorization: `Bearer ${config().token}` } });
+  if (!r.ok) throw new Error(`${p}: HTTP ${r.status}`);
+  return r.json();
+};
+const tailnetUrl = () => {
+  if (process.env.DM_PUBLIC_URL) return process.env.DM_PUBLIC_URL;
+  try { return `http://${execFileSync('tailscale', ['ip', '-4'], { encoding: 'utf8' }).trim().split('\n')[0]}:${port}`; }
+  catch {
+    console.error('Warning: no Tailscale address found, so these commands only work on this machine. Set DM_PUBLIC_URL.');
+    return local;
+  }
+};
+
+const commands = {
+  async join(args) {
+    const j = args.includes('--new') ? await api('POST', '/api/join/new') : await api('GET', '/api/join');
+    const hub = tailnetUrl();
+    const ps = (q) => `powershell -NoExit -NoProfile -ExecutionPolicy Bypass -Command "irm '${hub}/install.ps1?token=${j.key}${q}' | iex"`;
+    const sh = (q) => `curl -fsSL "${hub}/install.sh?token=${j.key}${q}" | bash`;
+    console.log(`Join key valid until ${new Date(j.expires).toLocaleString()}. Treat these commands like a password.\n`);
+    console.log('Windows, with remote restart and vetted scripts (Win+R, paste, Ctrl+Shift+Enter for admin):');
+    console.log(`  ${ps('&actions=1')}\n`);
+    console.log('Windows, monitoring only:');
+    console.log(`  ${ps('')}\n`);
+    console.log('Mac or Linux, with remote restart and vetted scripts (paste into Terminal):');
+    console.log(`  ${sh('&actions=1')}\n`);
+    console.log('Mac or Linux, monitoring only:');
+    console.log(`  ${sh('')}`);
+  },
+  async link() {
+    console.log(`${tailnetUrl()}/?key=${config().token}`);
+    console.log('Open it once in your browser. Treat it like a password.');
+  },
+  async status() {
+    const r = await api('GET', '/api/support');
+    for (const d of r.devices) {
+      const inv = d.inventory;
+      console.log(`${d.online ? 'online ' : 'offline'}  ${String(d.name).padEnd(24)} ${String(d.os || '').slice(0, 40).padEnd(40)} updates:${inv?.updatesChecked ? inv.updates : '?'} actions:${(d.latest?.actions || []).join('+') || 'off'}`);
+    }
+    console.log(`${r.alerts.length} active alert(s)`);
+    for (const a of r.alerts) console.log(`  ${a.title}: ${a.message}`);
+  },
+  async 'test-alert'() { console.log(JSON.stringify(await api('POST', '/api/alerts/test'))); },
+  async 'rotate-admin'() {
+    await api('POST', '/api/admin/rotate');
+    console.log('Admin key changed. Run: device-monitor-hub link');
+  },
+};
+const [cmd, ...args] = process.argv.slice(2);
+if (!commands[cmd]) {
+  console.log('usage: device-monitor-hub join [--new] | link | status | test-alert | rotate-admin');
+  process.exit(cmd ? 2 : 0);
+}
+commands[cmd](args).catch(e => { console.error(e.cause?.code === 'ECONNREFUSED' ? 'The hub is not running.' : e.message); process.exit(1); });

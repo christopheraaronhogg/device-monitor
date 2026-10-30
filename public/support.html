@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Device Support</title>
+<style>
+  :root { color-scheme: dark; --page: #0d0d0d; --s1: #1a1a1a; --s2: #262626; --text: #f0f0f0; --dim: #a6a6a6; --mute: #6e6e6e; --line: #333333; --y: #ffcd00; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; align-items: center; gap: 14px; padding: 14px 20px; border-bottom: 1px solid var(--line); }
+  h1 { font-size: 16px; margin: 0; font-weight: 700; }
+  h2 { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); margin: 22px 0 8px; font-weight: 600; }
+  a { color: var(--y); }
+  main { padding: 0 20px 40px; max-width: 1280px; margin: auto; }
+  .spacer { flex: 1; }
+  .muted { color: var(--dim); }
+  .tile-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+  .tile { background: var(--s1); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; min-width: 130px; }
+  .tile b { display: block; font-size: 22px; font-variant-numeric: tabular-nums; }
+  .tile.hot b { color: var(--y); }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 12px; color: var(--dim); font-weight: 500; padding: 6px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  td { padding: 9px 10px; border-bottom: 1px solid var(--s2); vertical-align: top; }
+  td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  tr.dev { cursor: pointer; }
+  tr.dev:hover td { background: var(--s1); }
+  tr.dev.off td { color: var(--mute); }
+  .hot { color: var(--y); font-weight: 600; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--text); margin-right: 8px; }
+  .dot.off { background: none; border: 1.5px solid var(--mute); }
+  .panel { background: var(--s1); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; margin: 6px 0 12px; }
+  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; }
+  .panel h3 { font-size: 13px; margin: 0 0 8px; }
+  button { font: inherit; color: var(--text); background: var(--s2); border: 1px solid var(--line); border-radius: 6px; padding: 5px 11px; cursor: pointer; }
+  button:hover { border-color: var(--dim); }
+  button.warn { border-color: var(--y); color: var(--y); background: none; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  input { font: inherit; color: var(--text); background: var(--page); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; width: 100%; }
+  input:focus-visible, button:focus-visible, a:focus-visible { outline: 2px solid var(--y); outline-offset: 1px; }
+  code, pre { font: 12.5px/1.45 ui-monospace, Consolas, monospace; }
+  code.cmd { display: block; background: var(--page); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; margin: 4px 0 8px; word-break: break-all; }
+  pre { background: var(--page); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow: auto; margin: 6px 0; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+  .scroll { max-height: 280px; overflow: auto; }
+  .small { font-size: 12.5px; }
+  li { margin-bottom: 3px; }
+  ul { padding-left: 18px; margin: 4px 0; }
+  #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--s2); border: 1px solid var(--y); padding: 8px 14px; border-radius: 8px; display: none; max-width: 90vw; }
+  @media (max-width: 640px) { main, header { padding-left: 16px; padding-right: 16px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Device Support</h1>
+  <span class="muted small" id="updated"></span>
+  <div class="spacer"></div>
+  <a href="/">Live charts</a>
+</header>
+<main>
+  <div class="tile-row" id="tiles"></div>
+  <h2>Alerts</h2>
+  <div id="alerts"></div>
+  <h2>Devices</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Device</th><th>OS</th><th>User</th><th>CPU temp</th><th>Fullest disk</th><th>Updates</th><th>Up</th><th>Actions</th></tr></thead>
+    <tbody id="devices"></tbody>
+  </table></div>
+  <h2>Recent script results</h2>
+  <div id="results"></div>
+  <h2>Audit log</h2>
+  <div class="table-wrap scroll"><table class="small">
+    <thead><tr><th>When</th><th>What</th><th>Device</th><th>Detail</th><th>From</th></tr></thead>
+    <tbody id="audit"></tbody>
+  </table></div>
+</main>
+<div id="toast" role="status"></div>
+<script>
+const $ = s => document.querySelector(s);
+const el = (tag, props = {}, ...kids) => {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (k === 'class') n.className = v;
+    else if (k.startsWith('on')) n.addEventListener(k.slice(2), v);
+    else if (k === 'text') n.textContent = v;
+    else n.setAttribute(k, v);
+  }
+  for (const c of kids) if (c != null) n.append(c);
+  return n;
+};
+const api = async (path, opts = {}) => {
+  const r = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
+  return body;
+};
+const toast = msg => {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.style.display = 'block';
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => { t.style.display = 'none'; }, 5000);
+};
+const ago = t => {
+  if (!t) return '';
+  const s = Math.max(0, (Date.now() - t) / 1000);
+  if (s < 90) return 'just now';
+  if (s < 5400) return Math.round(s / 60) + ' min ago';
+  if (s < 129600) return Math.round(s / 3600) + ' h ago';
+  return Math.round(s / 86400) + ' d ago';
+};
+const uptime = s => (s == null ? '' : s < 3600 ? Math.round(s / 60) + ' m' : s < 172800 ? Math.round(s / 3600) + ' h' : Math.round(s / 86400) + ' d');
+const fullest = d => {
+  let worst = null;
+  for (const x of d.latest?.disks || []) if (x.total > 1e9) { const p = x.used / x.total * 100; if (!worst || p > worst.p) worst = { p, name: x.name, free: x.total - x.used }; }
+  return worst;
+};
+const open = new Set();
+const details = new Map();
+let state = null;
+
+async function loadDetails(id) {
+  details.set(id, await api(`/api/devices/${encodeURIComponent(id)}/inventory`));
+  render();
+}
+
+function tiles(s) {
+  const on = s.devices.filter(d => d.online).length;
+  const updates = s.devices.reduce((n, d) => n + (d.inventory?.updates || 0), 0);
+  const reboot = s.devices.filter(d => d.inventory?.rebootRequired).length;
+  const items = [['Online', `${on} / ${s.devices.length}`, on < s.devices.length], ['Active alerts', s.alerts.length, s.alerts.length > 0], ['Pending updates', updates, false], ['Need a restart', reboot, reboot > 0]];
+  $('#tiles').replaceChildren(...items.map(([label, v, hot]) => el('div', { class: 'tile' + (hot ? ' hot' : '') }, el('b', { text: String(v) }), el('span', { class: 'muted small', text: label }))));
+}
+
+function deviceRow(d) {
+  const w = fullest(d), temp = d.latest?.cpu?.temp, inv = d.inventory;
+  const updates = inv ? (inv.updatesChecked ? String(inv.updates) : 'not checked') : 'no data';
+  const row = el('tr', { class: 'dev' + (d.online ? '' : ' off'), tabindex: '0', onclick: () => toggle(d.id), onkeydown: e => { if (e.key === 'Enter') toggle(d.id); } },
+    el('td', {}, el('span', { class: 'dot' + (d.online ? '' : ' off') }), el('b', { text: d.name }), d.online ? null : el('div', { class: 'small', text: 'seen ' + ago(d.lastSeen) })),
+    el('td', { class: 'small', text: d.os || '' }),
+    el('td', { class: 'small', text: inv?.user || '' }),
+    el('td', { class: 'num' + (temp >= 85 ? ' hot' : ''), text: temp == null ? 'no sensor' : Math.round(temp) + '°C' }),
+    el('td', { class: 'num' + (w && w.p >= 90 ? ' hot' : ''), text: w ? `${w.name} ${Math.round(w.p)}%` : '' }),
+    el('td', { class: 'num' + (inv?.rebootRequired ? ' hot' : '') }, updates, inv?.rebootRequired ? el('div', { class: 'small', text: 'restart needed' }) : null),
+    el('td', { class: 'num', text: d.online ? uptime(d.latest?.uptime) : '' }),
+    el('td', { class: 'small', text: (d.latest?.actions || []).join(', ') || 'off' }));
+  return row;
+}
+
+function toggle(id) {
+  if (open.has(id)) open.delete(id);
+  else { open.add(id); loadDetails(id).catch(e => toast(e.message)); }
+  render();
+}
+
+async function act(d, body) {
+  try {
+    await api(`/api/devices/${encodeURIComponent(d.id)}/action`, { method: 'POST', body: JSON.stringify(body) });
+    toast(`Sent to ${d.name}. It runs on the next report (a few seconds).`);
+    refresh();
+  } catch (e) { toast(e.message); }
+}
+
+function detailRow(d) {
+  const inv = details.get(d.id);
+  const canAct = d.online && d.actionsOverTailnet;
+  const acts = d.latest?.actions || [];
+  const actionsBox = el('div', {}, el('h3', { text: 'Actions' }));
+  if (!acts.length) actionsBox.append(el('p', { class: 'muted small', text: d.online ? 'Off on this device. Re-run the join command with actions to turn them on.' : 'Device is offline.' }));
+  if (acts.includes('restart')) {
+    const confirmBox = el('input', { placeholder: `Type ${d.name} to enable restart`, 'aria-label': 'Type the device name to confirm restart' });
+    const btn = el('button', { class: 'warn', text: 'Restart', disabled: 'disabled', onclick: () => act(d, { action: 'restart', confirm: confirmBox.value }) });
+    confirmBox.addEventListener('input', () => { btn.disabled = !(canAct && confirmBox.value === d.name); });
+    actionsBox.append(el('div', { class: 'row' }, confirmBox, btn), el('p', { class: 'muted small', text: 'Windows PCs get a 60-second warning. Cancel at the PC with: shutdown /a' }));
+  }
+  for (const s of d.scripts) {
+    const b = el('button', { text: 'Run', onclick: () => act(d, { action: 'script', script: s.name }) });
+    b.disabled = !canAct || !s.vetted;
+    actionsBox.append(el('div', { class: 'row small' }, b, el('span', { text: s.vetted ? s.desc : `${s.name}: copy on this PC doesn't match the vetted one` })));
+  }
+
+  const addr = d.addr && d.actionsOverTailnet && d.addr !== '127.0.0.1' ? d.addr : null;
+  const remote = el('div', {}, el('h3', { text: 'Remote access' }));
+  const user = d.sshUser || 'USER';
+  if (addr) {
+    remote.append(el('div', { class: 'small muted', text: d.platform === 'windows' ? 'Shell (needs Windows OpenSSH Server on)' : 'Shell (Tailscale SSH or Remote Login)' }), el('code', { class: 'cmd', text: `ssh ${user}@${addr}` }));
+    if (d.sshUser) remote.append(el('a', { href: `ssh://${d.sshUser}@${addr}`, class: 'small', text: 'Open in SSH app' }), ' ');
+  } else remote.append(el('p', { class: 'muted small', text: 'No Tailscale address reported.' }));
+  if (d.rustdeskId) remote.append(el('a', { href: `rustdesk://${d.rustdeskId}`, class: 'small', text: `Open RustDesk ${d.rustdeskId}` }));
+  const userIn = el('input', { value: d.sshUser || '', placeholder: 'SSH user', 'aria-label': 'SSH user' });
+  const rdIn = el('input', { value: d.rustdeskId || '', placeholder: 'RustDesk ID', 'aria-label': 'RustDesk ID' });
+  const save = el('button', { text: 'Save', onclick: async () => {
+    try { await api(`/api/devices/${encodeURIComponent(d.id)}`, { method: 'PATCH', body: JSON.stringify({ sshUser: userIn.value.trim(), rustdeskId: rdIn.value.trim() }) }); toast('Saved.'); refresh(); } catch (e) { toast(e.message); }
+  } });
+  remote.append(el('div', { class: 'row', style: 'margin-top:8px' }, userIn, rdIn, save));
+
+  const sysBox = el('div', {}, el('h3', { text: 'System' }));
+  const hw = d.inventory?.hw;
+  sysBox.append(el('p', { class: 'small', text: [hw?.vendor, hw?.model, hw?.serial && `S/N ${hw.serial}`].filter(Boolean).join(' · ') || 'No inventory yet (first scan runs when the agent starts).' }));
+  if (d.inventory) sysBox.append(el('p', { class: 'muted small', text: `Inventory ${ago(d.inventory.at)} · agent ${d.latest?.appVersion || '?'}` }));
+  if (d.platform === 'macos' && d.latest?.cpu?.temp == null) sysBox.append(el('p', { class: 'small', text: 'No temperatures: run brew install smctemp on the Mac.' }));
+  if (d.platform === 'windows' && d.latest?.cpu?.temp == null) sysBox.append(el('p', { class: 'small', text: 'No temperatures: re-run the join command as admin to add the sensor tool.' }));
+
+  const upBox = el('div', {}, el('h3', { text: `Updates${inv?.updates?.count ? ' (' + inv.updates.count + ')' : ''}` }));
+  if (!inv) upBox.append(el('p', { class: 'muted small', text: 'Loading…' }));
+  else if (inv.updates.error) upBox.append(el('p', { class: 'small', text: inv.updates.error }));
+  else if (!inv.updates.checked) upBox.append(el('p', { class: 'muted small', text: 'Not checked on this device.' }));
+  else if (!inv.updates.items.length) upBox.append(el('p', { class: 'muted small', text: 'Up to date.' }));
+  else upBox.append(el('ul', { class: 'small scroll' }, ...inv.updates.items.map(u => el('li', { text: [u.title, u.severity].filter(Boolean).join(' · ') }))));
+
+  const appBox = el('div', {}, el('h3', { text: `Software (${inv?.apps?.length ?? 0})` }));
+  const q = el('input', { placeholder: 'Filter', 'aria-label': 'Filter software' });
+  const appList = el('ul', { class: 'small scroll' });
+  const fill = () => {
+    const f = q.value.toLowerCase();
+    appList.replaceChildren(...(inv?.apps || []).filter(a => !f || a.name.toLowerCase().includes(f)).slice(0, 300).map(a => el('li', { text: `${a.name} ${a.version || ''}`.trim() })));
+  };
+  q.addEventListener('input', fill);
+  fill();
+  appBox.append(q, appList);
+
+  return el('tr', {}, el('td', { colspan: '8' }, el('div', { class: 'panel' }, el('div', { class: 'cols' }, actionsBox, remote, sysBox, upBox, appBox))));
+}
+
+function render() {
+  if (!state || document.activeElement?.closest?.('.panel')) return;
+  tiles(state);
+  $('#alerts').replaceChildren(...(state.alerts.length
+    ? state.alerts.map(a => el('div', { class: 'panel' }, el('b', { class: 'hot', text: a.title }), el('div', { class: 'small muted', text: `${a.message} Since ${ago(a.since)}.` })))
+    : [el('p', { class: 'muted small', text: 'No active alerts.' })]));
+  const rows = [];
+  if (!state.devices.length) rows.push(el('tr', {}, el('td', { colspan: '8', class: 'muted', text: 'No devices yet. On the hub, run: device-monitor-hub join' })));
+  for (const d of state.devices) { rows.push(deviceRow(d)); if (open.has(d.id)) rows.push(detailRow(d)); }
+  $('#devices').replaceChildren(...rows);
+  $('#results').replaceChildren(...(state.results.length
+    ? state.results.map(r => el('div', { class: 'panel small' }, el('b', { text: `${r.name}: ${r.script || r.action}` }), ' ', el('span', { class: r.ok ? 'muted' : 'hot', text: `${r.message} ${ago(r.t)}` }), r.output ? el('pre', { text: r.output }) : null))
+    : [el('p', { class: 'muted small', text: 'None yet.' })]));
+  $('#audit').replaceChildren(...state.audit.map(a => el('tr', {},
+    el('td', { class: 'num', text: new Date(a.t).toLocaleString() }), el('td', { text: a.kind }), el('td', { text: a.name || a.device || '' }),
+    el('td', { text: [a.action, a.script, a.message, a.error].filter(Boolean).join(' · ') }), el('td', { text: a.from || '' }))));
+  $('#updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+}
+
+async function refresh() {
+  try { state = await api('/api/support'); render(); }
+  catch (e) { if (/locked|HTTP 401/.test(e.message)) location.reload(); else $('#updated').textContent = 'Hub not answering: ' + e.message; }
+}
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>

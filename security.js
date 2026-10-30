@@ -20,7 +20,7 @@ const num = (v, min = 0, max = 1e18) => {
 };
 const list = (v, max) => (Array.isArray(v) ? v.slice(0, max) : []);
 const PLATFORMS = new Set(['windows', 'linux', 'macos']);
-const ACTIONS = new Set(['sleep', 'restart', 'shutdown']);
+const ACTIONS = new Set(['sleep', 'restart', 'shutdown', 'script']);
 const MAC_RE = /^([0-9a-f]{2}[:-]){5}[0-9a-f]{2}$/i;
 
 // Rebuilds a report from known fields only, with every value coerced to the expected type.
@@ -115,6 +115,17 @@ function isLocalAddress(ip) {
   return a === '::1' || /^fe[89ab]/.test(a) || /^f[cd]/.test(a);   // loopback, link-local, unique-local
 }
 
+// Tailscale's CGNAT range, the only addresses remote actions may travel over (WireGuard-encrypted).
+function isTailnetOrLoopback(ip) {
+  let a = String(ip || '').toLowerCase();
+  if (a.startsWith('::ffff:')) a = a.slice(7);
+  if (a === '::1' || a === '127.0.0.1') return true;
+  if (a.startsWith('fd7a:115c:a1e0:')) return true;
+  if (!net.isIPv4(a)) return false;
+  const [x, y] = a.split('.').map(Number);
+  return x === 100 && y >= 64 && y <= 127;
+}
+
 // Constant-time comparison for secrets.
 function safeEqual(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string') return false;
@@ -166,4 +177,4 @@ function htmlWithNonce(html) {
   return { body, headers: { 'Content-Security-Policy': csp, 'X-Frame-Options': 'DENY' } };
 }
 
-module.exports = { isValidId, normalizeReport, normalizeProcesses, ACTIONS, hostAllowed, isPrivateAddress, isLocalAddress, safeEqual, cookie, sameOrigin, htmlWithNonce, BASE_HEADERS };
+module.exports = { isValidId, normalizeReport, normalizeProcesses, ACTIONS, hostAllowed, isPrivateAddress, isLocalAddress, isTailnetOrLoopback, safeEqual, cookie, sameOrigin, htmlWithNonce, BASE_HEADERS };

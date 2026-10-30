@@ -21,7 +21,7 @@ const TYPES = {
 };
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
 const DEFAULT_RULES = [
-  { type: 'offline', device: '*', minutes: 10 },
+  { type: 'offline', device: '*', minutes: 15 },
   { type: 'cpuTemp', device: '*', threshold: 90, minutes: 2 },
   { type: 'gpuTemp', device: '*', threshold: 85, minutes: 2 },
   { type: 'disk', device: '*', threshold: 90, minutes: 0 },
@@ -77,8 +77,8 @@ function validSettings(b, prev) {
 class Alerts {
   // devices(): [{ id, name, online, lastSeen }]; latest(id): the device's last report;
   // costToday(id | '*'): { cost, currency } or null; hubUrl(): link to put in notifications.
-  constructor({ dataDir, broadcast, devices, latest, costToday, hubUrl, log = console.log }) {
-    Object.assign(this, { broadcast, devices, latest, costToday, hubUrl, log });
+  constructor({ dataDir, broadcast, devices, latest, costToday, hubUrl, log = console.log, sink = null, offlineQuiet = () => false }) {
+    Object.assign(this, { broadcast, devices, latest, costToday, hubUrl, log, sink, offlineQuiet });
     this.file = path.join(dataDir, 'alerts.json');
     this.logFile = path.join(dataDir, 'alerts-log.json');
     const saved = readJson(this.file, null);
@@ -166,6 +166,7 @@ class Alerts {
 
   tick() {
     const now = Date.now();
+    if (this.offlineQuiet(now)) return;
     for (const r of this.cfg.rules) {
       if (!r.enabled || r.type !== 'offline') continue;
       for (const d of this.targets(r)) {
@@ -253,7 +254,8 @@ class Alerts {
 
   async deliver(ev) {
     const { ntfy, webhook } = this.cfg.channels, out = {};
-    const link = this.hubUrl() + '/#/alerts';
+    const link = this.hubUrl() + '/support';
+    if (this.sink) { try { this.sink(ev); } catch (e) { this.log('alert sink failed:', e.message); } }
     if (ntfy.enabled) {
       out.ntfy = await post(ntfy.server, {
         topic: ntfy.topic, title: ev.title, message: ev.message, priority: ev.state === 'firing' ? 4 : 3,

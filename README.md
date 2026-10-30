@@ -1,3 +1,9 @@
+# Device Monitor: tech-support fork
+
+Fork of [Forward-Future/device-monitor](https://github.com/Forward-Future/device-monitor) for running a small office's PCs: a headless hub, one-command agents, alerts, inventory, and audited remote actions. See [FORK.md](FORK.md) for what changed and why, and for the install steps. The upstream README follows.
+
+---
+
 # Device Monitor
 
 A desktop app (Windows and macOS) in the style of NZXT CAM that shows CPU, GPU, memory, temperatures, disks and network for all your machines in one window.

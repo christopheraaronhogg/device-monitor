@@ -1,0 +1,22 @@
+[Unit]
+Description=Device Monitor hub (Tailscale + loopback only)
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+WorkingDirectory=%h/ClaudeWork/it-setup/device-monitor
+Environment=PATH=%h/.local/share/mise/shims:/usr/local/bin:/usr/bin
+Environment=DM_DATA_DIR=%h/.local/share/device-monitor-hub
+Environment=DM_ALERTS_DIR=%h/ClaudeWork/alerts
+Environment=DM_OFFLINE_QUIET=18:00-08:00,weekends
+ExecStart=/usr/bin/env node server.js
+Restart=always
+RestartSec=15
+Nice=10
+IOSchedulingClass=idle
+MemoryMax=512M
+NoNewPrivileges=true
+UMask=0077
+
+[Install]
+WantedBy=default.target

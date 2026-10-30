@@ -2,7 +2,7 @@
 # Device Monitor agent for Linux. Usage: agent.sh <hub-url> <token>  (or config in ~/.local/share/device-monitor/config)
 DIR="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$DIR/config" ] && . "$DIR/config"
-HUB="${1:-$HUB}"; TOKEN="${2:-$TOKEN}"; INTERVAL="${INTERVAL:-2}"
+HUB="${1:-$HUB}"; TOKEN="${2:-$TOKEN}"; INTERVAL="${INTERVAL:-5}"
 [ -z "$HUB" ] || [ -z "$TOKEN" ] && { echo "usage: $0 <hub> <token>"; exit 1; }
 HUB="${HUB%/}"
 
@@ -17,6 +17,7 @@ MODEL="$(cat /sys/devices/virtual/dmi/id/product_name 2>/dev/null)"
 case "$MODEL" in ""|*"To be filled"*|"System Product Name") ;; *) OS="$OS · $MODEL" ;; esac
 THREADS="$(grep -c ^processor /proc/cpuinfo)"
 case "$(cat /sys/class/dmi/id/chassis_type 2>/dev/null)" in 8|9|10|11|14|30|31|32) FORM=laptop ;; *) FORM=desktop ;; esac
+. "$DIR/agent-support.sh"
 esc() { printf '%s' "$1" | tr -d '"\\' | tr -d '[:cntrl:]'; }  # strip chars that would break JSON
 num() { [[ "$1" =~ ^-?[0-9]+(\.[0-9]+)?$ ]] && echo "$1" || echo null; }
 
@@ -135,6 +136,7 @@ sleep "$INTERVAL"
 while true; do
   # Exit with the desktop app that started us (if any).
   if [ -n "$PARENT_PID" ] && ! kill -0 "$PARENT_PID" 2>/dev/null; then exit 0; fi
+  dm_inventory_tick inventory-linux.sh
   T=$(date +%s.%N); CUR_CPU="$(read_cpu)"; CUR_NET="$(read_net)"; CUR_DISK="$(read_disk)"
   if [ -n "$PY3" ] && [ $((AI_N++ % 5)) -eq 0 ]; then AI="$("$PY3" -c "$AI_PY" 2>/dev/null)"; fi
   CPU_JSON="$(paste -d' ' <(echo "$PREV_CPU") <(echo "$CUR_CPU") | awk '
@@ -153,7 +155,7 @@ while true; do
   MHZ="$(awk -F: '/cpu MHz/ { s+=$2; n++ } END { if(n) printf "%.0f", s/n; else print "null" }' /proc/cpuinfo)"
   [ "$MHZ" = "null" ] && [ -f /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq ] && MHZ=$(( $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq) / 1000 ))
   UPTIME="$(cut -d. -f1 /proc/uptime)"
-  DISKS="$(df -B1 -x tmpfs -x devtmpfs -x squashfs -x overlay -x efivarfs -x 9p -x drvfs 2>/dev/null | awk 'NR>1 && $6 !~ /^\/(boot|snap|init$|usr\/lib\/wsl|mnt\/wsl)/ { gsub(/"/,"",$6); printf "%s{\"name\":\"%s\",\"total\":%s,\"used\":%s}", (n++?",":""), $6, $2, $3 }')"
+  DISKS="$(df -B1 -x tmpfs -x devtmpfs -x squashfs -x overlay -x efivarfs -x 9p -x drvfs -x iso9660 -x udf 2>/dev/null | awk 'NR>1 && $6 !~ /^\/(boot|snap|init$|usr\/lib\/wsl|mnt\/wsl|run\/media|media)/ { gsub(/"/,"",$6); printf "%s{\"name\":\"%s\",\"total\":%s,\"used\":%s}", (n++?",":""), $6, $2, $3 }')"
 
   GPUS=""
   if command -v nvidia-smi >/dev/null 2>&1; then
@@ -169,7 +171,7 @@ while true; do
     GPUS="$GPUS${GPUS:+,}{\"name\":\"AMD GPU\",\"vendor\":\"amd\",\"usage\":$U,\"temp\":$GT,\"memUsed\":$MU,\"memTotal\":$MT,\"power\":$GP}"
   done
 
-  BODY="{\"id\":\"$ID\",\"token\":\"$TOKEN\",\"hostname\":\"$(esc "$HOST")\",\"platform\":\"linux\",\"appVersion\":\"$(esc "${DM_APP_VERSION:-}")\",\"os\":\"$(esc "$OS")\",\"formFactor\":\"$FORM\",\"power\":{\"cpu\":$(num "$CPU_W")},\"uptime\":$UPTIME,\"cpu\":{\"name\":\"$(esc "$CPU_NAME")\",\"threads\":$THREADS,\"clockMHz\":$MHZ,\"temp\":$(cpu_temp),$CPU_JSON},\"memory\":{$MEM},\"gpus\":[$GPUS],\"disks\":[$DISKS],$RATES,\"ai\":${AI:-null}}"
-  curl -fsS -m 5 -X POST -H 'Content-Type: application/json' --data-binary "$BODY" "$HUB/api/report" >/dev/null 2>&1
+  BODY="{\"id\":\"$ID\",\"token\":\"$TOKEN\",\"hostname\":\"$(esc "$HOST")\",\"platform\":\"linux\",\"appVersion\":\"$AGENT_VERSION\",\"os\":\"$(esc "$OS")\",\"formFactor\":\"$FORM\",\"power\":{\"cpu\":$(num "$CPU_W")},\"uptime\":$UPTIME,\"cpu\":{\"name\":\"$(esc "$CPU_NAME")\",\"threads\":$THREADS,\"clockMHz\":$MHZ,\"temp\":$(cpu_temp),$CPU_JSON},\"memory\":{$MEM},\"gpus\":[$GPUS],\"disks\":[$DISKS],$RATES,\"ai\":${AI:-null},$DM_EXTRA}"
+  dm_send_report "$BODY"
   sleep "$INTERVAL"
 done
